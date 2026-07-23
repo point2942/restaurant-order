@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>廚房出單畫面</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.45.0/supabase.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <h1>廚房出單畫面</h1>
+  <span id="clock"></span>
+</header>
+
+<div class="container">
+  <div class="category-tabs">
+    <button id="tabActive" class="active" onclick="setView('active')">進行中</button>
+    <button id="tabReady" onclick="setView('ready')">待取餐</button>
+  </div>
+  <div class="kitchen-grid" id="grid"></div>
+</div>
+
+<script>
+let orders = [];
+let view = 'active';
+
+function setView(v) {
+  view = v;
+  document.getElementById('tabActive').classList.toggle('active', v === 'active');
+  document.getElementById('tabReady').classList.toggle('active', v === 'ready');
+  render();
+}
+
+function typeLabel(t) { return { dine_in: '內用', takeout: '外帶', delivery: '外送' }[t] || t; }
+function statusLabel(s) { return { pending: '待確認', confirmed: '已確認', preparing: '準備中', ready: '待取餐', completed: '已完成', cancelled: '已取消' }[s] || s; }
+
+async function loadOrders() {
+  const statusFilter = view === 'ready' ? 'ready' : 'pending,confirmed,preparing';
+  const res = await fetch('/api/orders?status=' + statusFilter);
+  orders = await res.json();
+  render();
+}
+
+function render() {
+  const grid = document.getElementById('grid');
+  if (!orders.length) {
+    grid.innerHTML = '<div class="empty-hint">目前沒有訂單</div>';
+    return;
+  }
+  grid.innerHTML = orders.map(o => {
+    const tableInfo = o.dining_tables ? `桌號 ${o.dining_tables.table_number}` : (o.order_type === 'delivery' ? `外送・${o.customer_name || ''}` : `自取・${o.customer_name || ''}`);
+    const items = (o.order_items || []).map(i => `<li><span>${i.item_name} x ${i.quantity}</span></li>`).join('');
+    let nextBtn = '';
+    if (o.status === 'pending') nextBtn = `<button class="btn-primary" onclick="advance(${o.id}, 'confirmed')">確認訂單</button>`;
+    else if (o.status === 'confirmed') nextBtn = `<button class="btn-primary" onclick="advance(${o.id}, 'preparing')">開始製作</button>`;
+    else if (o.status === 'preparing') nextBtn = `<button class="btn-primary" onclick="advance(${o.id}, 'ready')">製作完成</button>`;
+    else if (o.status === 'ready') nextBtn = `<button class="btn-primary" onclick="advance(${o.id}, 'completed')">已交餐</button>`;
+    return `
+      <div class="order-card">
+        <div class="order-head">
+          <span class="no">${o.order_no}</span>
+          <span class="tag ${o.status}">${statusLabel(o.status)}</span>
+        </div>
+        <p style="color:#777;font-size:13px;">${typeLabel(o.order_type)}｜${tableInfo}</p>
+        <ul>${items}</ul>
+        ${o.notes ? `<p style="font-size:13px;color:#c0602a;">備註：${o.notes}</p>` : ''}
+        <div class="actions">
+          ${nextBtn}
+          ${o.status !== 'completed' && o.status !== 'cancelled' ? `<button class="btn-danger" onclick="advance(${o.id}, 'cancelled')">取消訂單</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function advance(orderId, status) {
+  await fetch('/api/orders/' + orderId + '/status', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  loadOrders();
+}
+
+function tickClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+}
+
+async function initRealtime() {
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) return;
+    const client = supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    client.channel('kitchen-orders')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => loadOrders())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => loadOrders())
+      .subscribe();
+  } catch (e) { console.warn('Realtime 未啟用，改用輪詢', e); }
+}
+
+loadOrders();
+initRealtime();
+setInterval(loadOrders, 10000); // 輪詢備援，確保即使 realtime 斷線也能更新
+setInterval(tickClock, 1000);
+tickClock();
+</script>
+</body>
+</html>

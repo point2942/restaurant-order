@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>掃碼點餐</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1 id="tableTitle">掃碼點餐</h1>
+  <span id="tableStatus"></span>
+</header>
+
+<div class="container" id="menuContainer">
+  <div class="category-tabs" id="categoryTabs"></div>
+  <div id="itemsList"></div>
+</div>
+
+<div class="cart-bar" id="cartBar" style="display:none;" onclick="openCart()">
+  <span id="cartSummary">購物車 0 項</span>
+  <span class="btn-primary">查看購物車</span>
+</div>
+
+<div id="cartModal"></div>
+<div id="confirmModal"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const tableToken = params.get('t');
+let menu = [];
+let cart = {}; // menu_item_id -> {item, qty, notes}
+let table = null;
+let activeCategory = null;
+
+async function init() {
+  if (tableToken) {
+    try {
+      const res = await fetch('/api/tables/by-token/' + tableToken);
+      if (res.ok) {
+        table = await res.json();
+        document.getElementById('tableTitle').textContent = '桌號 ' + table.table_number;
+      } else {
+        document.getElementById('tableTitle').textContent = '找不到桌位，請聯繫服務生';
+      }
+    } catch (e) {}
+  }
+  const res = await fetch('/api/menu');
+  menu = await res.json();
+  renderCategories();
+}
+
+function renderCategories() {
+  const tabs = document.getElementById('categoryTabs');
+  tabs.innerHTML = '';
+  if (!activeCategory && menu.length) activeCategory = menu[0].id;
+  menu.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.textContent = cat.name;
+    if (cat.id === activeCategory) btn.classList.add('active');
+    btn.onclick = () => { activeCategory = cat.id; renderCategories(); renderItems(); };
+    tabs.appendChild(btn);
+  });
+  renderItems();
+}
+
+function renderItems() {
+  const list = document.getElementById('itemsList');
+  list.innerHTML = '';
+  const cat = menu.find(c => c.id === activeCategory);
+  if (!cat) return;
+  cat.items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'menu-item' + (item.is_available ? '' : ' unavailable');
+    const qty = cart[item.id] ? cart[item.id].qty : 0;
+    div.innerHTML = `
+      <div class="info">
+        <h3>${item.name}</h3>
+        <p>${item.description || ''}</p>
+        <div class="price">NT$ ${Number(item.price).toFixed(0)}</div>
+      </div>
+      <div class="qty-control">
+        <button onclick="changeQty(${item.id}, -1)">－</button>
+        <span>${qty}</span>
+        <button onclick="changeQty(${item.id}, 1)" ${item.is_available ? '' : 'disabled'}>＋</button>
+      </div>`;
+    list.appendChild(div);
+  });
+}
+
+function changeQty(itemId, delta) {
+  const allItems = menu.flatMap(c => c.items);
+  const item = allItems.find(i => i.id === itemId);
+  if (!item) return;
+  const existing = cart[itemId] || { item, qty: 0, notes: '' };
+  existing.qty = Math.max(0, existing.qty + delta);
+  if (existing.qty === 0) delete cart[itemId];
+  else cart[itemId] = existing;
+  renderItems();
+  updateCartBar();
+}
+
+function updateCartBar() {
+  const bar = document.getElementById('cartBar');
+  const count = Object.values(cart).reduce((s, c) => s + c.qty, 0);
+  if (count === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  document.getElementById('cartSummary').textContent = `購物車 ${count} 項`;
+}
+
+function openCart() {
+  const items = Object.values(cart);
+  const total = items.reduce((s, c) => s + c.qty * c.item.price, 0);
+  const modal = document.getElementById('cartModal');
+  modal.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeCart()">
+      <div class="modal-sheet">
+        <h2>購物車</h2>
+        <ul>
+        ${items.map(c => `
+          <li style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed #eee;">
+            <span>${c.item.name} x ${c.qty}</span>
+            <span>NT$ ${(c.item.price * c.qty).toFixed(0)}</span>
+          </li>`).join('')}
+        </ul>
+        <p style="margin:12px 0;font-weight:600;">總計：NT$ ${total.toFixed(0)}</p>
+        <label>備註（例如：不加辣、少冰）</label>
+        <textarea id="orderNotes" rows="2"></textarea>
+        <div style="display:flex;gap:10px;margin-top:10px;">
+          <button class="btn-secondary" style="flex:1" onclick="closeCart()">繼續點餐</button>
+          <button class="btn-primary" style="flex:1" onclick="submitOrder()">送出訂單</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function closeCart() { document.getElementById('cartModal').innerHTML = ''; }
+
+async function submitOrder() {
+  const items = Object.values(cart).map(c => ({
+    menu_item_id: c.item.id, item_name: c.item.name, item_price: c.item.price, quantity: c.qty
+  }));
+  const notes = document.getElementById('orderNotes').value;
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_type: 'dine_in', source: 'customer_qr',
+        table_id: table ? table.id : null, notes, items
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '送出失敗');
+    cart = {};
+    closeCart();
+    updateCartBar();
+    showConfirm(data.order_no);
+  } catch (e) {
+    alert('送出訂單失敗：' + e.message);
+  }
+}
+
+function showConfirm(orderNo) {
+  document.getElementById('confirmModal').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-sheet centered" style="text-align:center;">
+        <h2>訂單已送出</h2>
+        <p style="margin:14px 0;font-size:18px;">訂單編號：${orderNo}</p>
+        <p style="color:#777;margin-bottom:16px;">餐點準備中，請稍候</p>
+        <button class="btn-primary" onclick="document.getElementById('confirmModal').innerHTML=''">繼續點餐</button>
+      </div>
+    </div>`;
+}
+
+init();
+</script>
+</body>
+</html>
