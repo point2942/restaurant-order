@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>桌卡列印</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: #ece7de;
+    padding: 20px;
+  }
+  .toolbar {
+    max-width: 900px; margin: 0 auto 20px auto;
+    background: #fff; border-radius: 12px; padding: 16px 20px;
+    display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+  }
+  .toolbar .field { flex: 1; min-width: 160px; }
+  .toolbar label { font-size: 13px; color: #555; display: block; margin-bottom: 4px; }
+  .toolbar input {
+    width: 100%; padding: 9px; border: 1px solid #cfc7ba; border-radius: 8px; font-size: 14px;
+  }
+  .toolbar button {
+    background: #1f2a24; color: #fff; border: none; padding: 10px 20px;
+    border-radius: 8px; font-size: 14px; cursor: pointer; white-space: nowrap;
+  }
+  .cards-wrap {
+    max-width: 900px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 24px;
+  }
+  .card {
+    background: #fdfaf5;
+    border-radius: 18px;
+    padding: 28px 20px 24px 20px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    border: 2px solid #1f2a24;
+  }
+  .card::before {
+    content: '';
+    position: absolute; inset: 8px;
+    border: 1px dashed #c0602a;
+    border-radius: 12px;
+    pointer-events: none;
+  }
+  .card .brand {
+    font-size: 14px; letter-spacing: 2px; color: #c0602a; font-weight: 600; margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .card .restaurant-name {
+    font-size: 20px; font-weight: 700; color: #1f2a24; margin-bottom: 14px;
+  }
+  .card .invite {
+    font-size: 13px; color: #777; margin-bottom: 14px;
+  }
+  .card img.qr {
+    width: 170px; height: 170px; margin: 0 auto 14px auto; display: block;
+    border: 6px solid #fff; box-shadow: 0 0 0 1px #eee;
+  }
+  .card .table-number {
+    font-size: 28px; font-weight: 800; color: #1f2a24; letter-spacing: 1px;
+  }
+  .card .table-sub {
+    font-size: 12px; color: #999; margin-top: 4px;
+  }
+  .card .scan-hint {
+    margin-top: 16px; font-size: 12px; color: #c0602a; font-weight: 600;
+  }
+
+  @media print {
+    body { background: #fff; padding: 0; }
+    .toolbar { display: none; }
+    .cards-wrap {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      max-width: 100%;
+    }
+    .card { break-inside: avoid; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="field">
+    <label>餐廳名稱（會印在桌卡上）</label>
+    <input id="restaurantName" placeholder="例如：好食光小館" value="我的餐廳">
+  </div>
+  <button onclick="renderCards()">套用</button>
+  <button onclick="window.print()">列印桌卡</button>
+</div>
+
+<div class="cards-wrap" id="cardsWrap"></div>
+
+<script>
+let tables = [];
+
+async function init() {
+  const res = await fetch('/api/tables');
+  tables = await res.json();
+  renderCards();
+}
+
+function renderCards() {
+  const name = document.getElementById('restaurantName').value || '我的餐廳';
+  const origin = location.origin;
+  const wrap = document.getElementById('cardsWrap');
+  wrap.innerHTML = tables.map(t => {
+    const link = origin + '/customer.html?t=' + t.qr_token;
+    const qrImg = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(link);
+    return `
+      <div class="card">
+        <div class="brand">Scan &amp; Order</div>
+        <div class="restaurant-name">${name}</div>
+        <div class="invite">掃描 QR Code 開始點餐</div>
+        <img class="qr" src="${qrImg}" alt="QR Code">
+        <div class="table-number">${t.table_number}</div>
+        <div class="table-sub">${t.seats} 人桌</div>
+        <div class="scan-hint">用手機相機掃描即可點餐</div>
+      </div>`;
+  }).join('');
+}
+
+init();
+</script>
+</body>
+</html>
